@@ -148,7 +148,7 @@ const user: User = {
         editorInstanceRef.current = null;
       }
     };
-  }, []); // Empty dependency array means this effect runs once on mount
+  }, []);
 
   return <div ref={editorRef} className="border border-gray-300 rounded-md p-4 min-h-[200px]" />;
 };
