@@ -1,81 +1,154 @@
-import React from 'react'
-import {EditorView, basicSetup} from 'codemirror'
-import {EditorState} from '@codemirror/state'
-import {javascript} from '@codemirror/lang-javascript'
-import {autocompletion, CompletionContext, CompletionResult} from '@codemirror/autocomplete'
-import {HOME_TYPE_STRUCTURE, TypeStructure} from './jsTypes'
+import React, { useEffect, useRef } from 'react';
+import { EditorView, basicSetup } from 'codemirror';
+import { javascript } from '@codemirror/lang-javascript';
+import { autocompletion } from '@codemirror/autocomplete';
+import {
+  createDefaultMapFromCDN,
+  createSystem,
+  createVirtualTypeScriptEnvironment,
+} from '@typescript/vfs';
+import ts, { CompilerOptions } from 'typescript';
+import { tsAutocomplete, tsFacet, tsHover, tsLinter, tsSync } from '@valtown/codemirror-ts';
 
-
-
-function createCompletions(context: CompletionContext): CompletionResult | null {
-  const word = context.matchBefore(/[\w.]+\.[\w]*/)
-  if (!word || !word.text.endsWith('.')) return null
-
-  const parts = word.text.slice(0, -1).split('.')
-  const prefix = parts[0].toLowerCase()
-  
-  if (prefix !== 'home') return null
-
-  // Navigate through the nested structure
-  let currentStructure = HOME_TYPE_STRUCTURE
-  for (let i = 1; i < parts.length; i++) {
-    const part = parts[i]
-    if (currentStructure[part]?.properties) {
-      currentStructure = currentStructure[part].properties!
-    } else {
-      return null
+// Utility function to add custom type declarations to the environment
+function addCustomDeclarations(env: any) {
+  env.createFile(
+    'env.d.ts',
+    `
+    declare var Summit: {
+      env: "biz" | "baz";
+    };
+    
+    interface User {
+  id: number;
+  name: string;
+      email: string;
     }
-  }
+  `
+  );
 
-  return {
-    from: word.from + word.text.length,
-    options: Object.entries(currentStructure).map(([key, value]) => ({
-      label: key,
-      type: value.type === 'object' ? 'interface' : value.type,
-      detail: getDetailString(value),
-    })),
-  }
+  env.createFile(
+    '/foo.tsx',
+    `export function foo(name: string) { return name; }`
+  );
+
+  env.createFile(
+    '/constants.json',
+    `{
+      "name": "example-name",
+      "isJson": true,
+      "some": {
+        "nested": {
+          "data": [1, 2, 3]
+        }
+      }
+    }`
+  );
 }
 
-function getDetailString(value: TypeStructure[string]): string {
-  if (value.type === 'array') {
-    return `${value.arrayType}[]`
-  } else if (value.enum) {
-    return `enum: ${value.enum.join(' | ')}`
-  } else if (value.properties) {
-    return 'object'
-  }
-  return value.type
-}
-
-// CodeEditor component
 export const CodeEditor: React.FC = () => {
-  const editorRef = React.useRef<HTMLDivElement>(null)
+  const editorRef = useRef<HTMLDivElement>(null);
+  const editorInstanceRef = useRef<EditorView | null>(null);
 
-  React.useEffect(() => {
-    if (!editorRef.current) return
+  useEffect(() => {
+    // Guard clause to prevent multiple initializations
+    if (editorInstanceRef.current || !editorRef.current) {
+      return;
+    }
 
-    const state = EditorState.create({
-      doc: '// Type your home properties here\nhome.',
-      extensions: [
-        basicSetup,
-        javascript({
-          // jsx: true, 
-          // typescript: true,
-        }),
-        autocompletion({
-          override: [createCompletions],
-        }),
-      ],
-    })
+    let mounted = true;
 
-    const view = new EditorView({
-      state,
-      parent: editorRef.current,
-    })
+    const initializeEditor = async () => {
+      try {
+        // Set up TypeScript Virtual File System
+        const fsMap = await createDefaultMapFromCDN(
+          { target: ts.ScriptTarget.ES2022 },
+          '3.7.3',
+          true,
+          ts
+        );
 
-    return () => view.destroy()
-  }, [])
+        // Check if component is still mounted after async operation
+        if (!mounted || !editorRef.current) {
+          return;
+        }
 
-  return <div ref={editorRef} className='border border-gray-300 rounded-md p-4 min-h-[200px]' />
+        const system = createSystem(fsMap);
+        const compilerOpts: CompilerOptions = {
+          jsx: ts.JsxEmit.ReactJSX,
+          skipLibCheck: true,
+          esModuleInterop: true,
+          lib: ['dom', 'es2015'],
+          allowSyntheticDefaultImports: true,
+          forceConsistentCasingInFileNames: true,
+          noFallthroughCasesInSwitch: true,
+          module: ts.ModuleKind.ESNext,
+          resolveJsonModule: true,
+          noEmit: true,
+        };
+
+        const env = createVirtualTypeScriptEnvironment(system, [], ts, compilerOpts);
+        addCustomDeclarations(env);
+
+        const path = 'index.tsx';
+
+        // Initialize the CodeMirror editor
+        const editor = new EditorView({
+          doc: `
+// Sample interface declaration 
+
+interface User {
+  id: number;
+  name: string;
+  email: string;
 }
+
+// Function that uses the interface
+function getUserInfo(user: User): string {
+  return "User ID: " + user.id + ", Name: " + user.name + ", Email: " + user.email;
+}
+
+// Sample usage of the function
+const user: User = {
+  id: 1,
+  name: "John Doe",
+  email: "johndoe@example.com",
+};
+          `.trim(),
+          extensions: [
+            basicSetup,
+            javascript({
+              typescript: true,
+              jsx: true,
+            }),
+            tsFacet.of({ env, path }),
+            tsSync(),
+            tsLinter(),
+            autocompletion({
+              override: [tsAutocomplete()],
+            }),
+            tsHover(),
+          ],
+          parent: editorRef.current,
+        });
+
+        editorInstanceRef.current = editor;
+      } catch (error) {
+        console.error('Failed to initialize editor:', error);
+      }
+    };
+
+    initializeEditor();
+
+    // Cleanup function
+    return () => {
+      mounted = false;
+      if (editorInstanceRef.current) {
+        editorInstanceRef.current.destroy();
+        editorInstanceRef.current = null;
+      }
+    };
+  }, []); // Empty dependency array means this effect runs once on mount
+
+  return <div ref={editorRef} className="border border-gray-300 rounded-md p-4 min-h-[200px]" />;
+};
