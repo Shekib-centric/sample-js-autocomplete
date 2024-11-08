@@ -97,11 +97,12 @@ export const CodeEditor: React.FC = () => {
           doc: `
 // Sample interface declaration 
 
-interface User {
-  id: number;
-  name: string;
-  email: string;
-}
+// !!! DO NOT NEED THIS AS WE CAN DECLARE TYPES IN THE run env and refference them here. !!!
+// interface User {
+//   id: number;
+//   name: string;
+//   email: string;
+// }
 
 // Function that uses the interface
 function getUserInfo(user: User): string {
